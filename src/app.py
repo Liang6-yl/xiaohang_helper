@@ -1,8 +1,7 @@
 import requests
 import streamlit as st
-import time  # 新增：用于API耗时统计
+import time
 from pathlib import Path
-# 修复模块导入报错：移除src.，使用同目录相对导入
 from prompts import load_school_info, get_system_prompt
 
 # 硅基流动API配置
@@ -10,20 +9,24 @@ API_URL = "https://api.siliconflow.cn/v1/chat/completions"
 API_KEY = "sk-tabchgnzwvpktqodizygjwciucpufprpiycsivtcmzhjqssf"
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
-# 本地输入替换别名词典（和prompt内规则同步）
+# 本地输入替换别名词典
 INPUT_ALIAS = {
     "ZUA": "郑州航空工业管理学院",
     "郑航": "郑州航空工业管理学院",
     "航院": "郑州航空工业管理学院"
 }
 
-# 会话状态初始化
+# ========== 会话状态初始化（新增多轮对话messages） ==========
 if "user_q" not in st.session_state:
     st.session_state.user_q = ""
+# 页面侧边提问历史
 if "question_history" not in st.session_state:
     st.session_state.question_history = []
+# 多轮对话上下文存储
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
 
-# ===================== 优化：知识库仅启动加载一次，不再每次提问重复读取 =====================
+# 全局仅加载一次知识库
 kb_data = load_school_info()
 md_files = list(Path("data").glob("*.md"))
 
@@ -33,7 +36,7 @@ st.title("小航 · 郑州航院校园信息助手")
 # 身份下拉选择
 user_role = st.selectbox("你的身份：", ["新生", "在校生", "教师"])
 
-# 【功能5 4分类标签页：新生指南/办事流程/应急防骗/交通出行】
+# 【功能5 4分类标签页】
 st.markdown("### 快捷提问（点击自动填充并查询AI）")
 tab1, tab2, tab3, tab4 = st.tabs(["新生指南", "办事流程", "应急防骗", "交通出行"])
 
@@ -67,7 +70,7 @@ with tab3:
                 st.session_state.user_q = q
                 st.rerun()
 
-# 标签4：交通出行（6个交通快捷键）
+# 标签4：交通出行（6个快捷键）
 with tab4:
     traffic_qs = [
         "怎么坐地铁去学校？",
@@ -87,27 +90,31 @@ with tab4:
 # 问题输入框
 user_input = st.text_input("输入你的问题：", value=st.session_state.user_q)
 
-# 快捷按钮自动填充逻辑
+# 快捷按钮回填逻辑
 if st.session_state.user_q and st.session_state.user_q.strip() != "":
     user_input = st.session_state.user_q
     st.session_state.user_q = ""
 
-# 别名替换预处理
+# 【已移至输入框下方】新对话清空上下文按钮
+if st.button("🆕 开启新对话（清空上下文记忆）"):
+    st.session_state["messages"] = []
+    st.rerun()
+
+# 别名替换
 def replace_alias(text):
     for k, v in INPUT_ALIAS.items():
         text = text.replace(k, v)
     return text
 process_text = replace_alias(user_input.strip())
 
-# 判断知识库文件缺失
+# 知识库缺失校验
 if not md_files:
-    st.warning("⚠️ data目录知识库md文件缺失，请补齐4个文档（包含05_交通出行.md）")
+    st.warning("⚠️ data目录知识库md文件缺失，请补齐文档（包含05_交通出行.md）")
 else:
-    # 空输入提示
     if process_text == "":
         st.info("💡 请输入你的问题或点击上方快捷提问按钮")
 
-    # 提问历史区域（标题右侧放置清空按钮）
+    # 提问历史区域（标题右侧清空按钮）
     st.divider()
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -117,7 +124,6 @@ else:
             st.session_state.question_history = []
             st.rerun()
 
-    # 历史列表展示
     if len(st.session_state.question_history) == 0:
         st.info("暂无提问记录，输入问题开始查询吧")
     else:
@@ -128,26 +134,26 @@ else:
     st.divider()
 
     if process_text:
-        # 超长文本友好提示（支持500字，超过600字提醒拆分）
+        # 超长文本提醒
         if len(process_text) > 600:
             st.warning("⚠️ 问题文本过长，建议拆分为2段提问，减少超时概率；当前仍可提交尝试")
 
-        # 历史记录去重保存
+        # 存入全局提问历史
         if process_text not in st.session_state.question_history:
             st.session_state.question_history.append(process_text)
 
-        # 请求体优化：DeepSeek-V3.2，适度降低max_tokens减少推理耗时
+        # 构造多轮对话完整messages（系统词 + 历史对话 + 当前提问）
+        system_prompt = get_system_prompt(user_role, kb_data)
+        full_messages = [{"role": "system", "content": system_prompt}] + st.session_state["messages"]
+        full_messages.append({"role": "user", "content": process_text})
+
         request_body = {
             "model": "deepseek-ai/DeepSeek-V3.2",
             "max_tokens": 600,
             "temperature": 0.01,
-            "messages": [
-                {"role":"system","content":get_system_prompt(user_role, kb_data)},
-                {"role":"user","content":process_text}
-            ]
+            "messages": full_messages  # 携带完整上下文
         }
 
-        # 加载动画 + 自动重试逻辑
         with st.spinner("🤖 小航正在思考中..."):
             max_retry = 2
             retry_count = 0
@@ -155,11 +161,11 @@ else:
             res = None
             ans = ""
             skip_render = False
+            start = time.time()
 
             # 超时重试循环
             while retry_count <= max_retry and not success_flag:
                 try:
-                    start = time.time()  # 功能6：记录API请求起始时间
                     res = requests.post(API_URL, headers=HEADERS, json=request_body, timeout=90)
                     success_flag = True
                 except requests.exceptions.Timeout:
@@ -175,11 +181,10 @@ else:
                     skip_render = True
                     break
 
-            # 重试失败，直接跳过回答渲染
             if skip_render:
                 pass
             else:
-                # HTTP状态码校验
+                # HTTP状态校验
                 if res.status_code == 401:
                     st.error("❌ API Key鉴权失败，请重新填写硅基流动密钥")
                 elif res.status_code >= 500:
@@ -191,30 +196,30 @@ else:
                 elif res.status_code != 200:
                     st.error(f"❌ 接口异常，状态码：{res.status_code}")
                 else:
-                    # JSON解析容错
                     try:
                         json_data = res.json()
                     except requests.exceptions.JSONDecodeError:
                         st.error("❌ 接口返回文本解析失败")
                     else:
-                        # 校验返回数据结构
                         if "choices" not in json_data or len(json_data["choices"]) == 0:
                             st.error("❌ AI未生成有效回答，请缩短问题长度重试")
                         else:
-                            # 使用get容错，防止message/content键缺失报错空白
                             ans = json_data["choices"][0]["message"].get("content", "").strip()
-                            end = time.time()  # 功能6：请求结束计时
+                            end = time.time()
                             cost_time = end - start
                             if not ans:
                                 st.error("❌ AI返回回答为空，请拆分长提问重新发送")
                             else:
-                                # 全部校验通过，展示回答
+                                # 输出回答
                                 st.subheader("🤖小航回答：")
                                 st.write(ans)
-                                # 功能6：小字展示字数+耗时元信息
+                                # 功能6：字数耗时小字展示
                                 st.caption(f"回答字数：{len(ans)} 字 · 耗时：{cost_time:.1f} 秒")
+                                # 保存本轮问答到上下文，实现多轮记忆
+                                st.session_state["messages"].append({"role": "user", "content": process_text})
+                                st.session_state["messages"].append({"role": "assistant", "content": ans})
 
-# 离线静态电话黄页（断网兜底）
+# 离线电话黄页
 st.divider()
 st.header("📞 校园电话黄页（离线兜底，无需联网）")
 st.caption("AI接口故障时，可直接查看官方联系电话")
