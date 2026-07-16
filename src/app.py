@@ -16,13 +16,13 @@ INPUT_ALIAS = {
     "航院": "郑州航空工业管理学院"
 }
 
-# ========== 会话状态初始化（新增多轮对话messages） ==========
+# ========== 会话状态初始化（多轮对话messages） ==========
 if "user_q" not in st.session_state:
     st.session_state.user_q = ""
-# 页面侧边提问历史
+# 全局提问历史
 if "question_history" not in st.session_state:
     st.session_state.question_history = []
-# 多轮对话上下文存储
+# 多轮上下文对话存储
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
@@ -95,12 +95,34 @@ if st.session_state.user_q and st.session_state.user_q.strip() != "":
     user_input = st.session_state.user_q
     st.session_state.user_q = ""
 
-# 【已移至输入框下方】新对话清空上下文按钮
-if st.button("🆕 开启新对话（清空上下文记忆）"):
-    st.session_state["messages"] = []
-    st.rerun()
+# 双列布局：新对话按钮 + 导出对话按钮
+col_btn1, col_btn2 = st.columns([1, 1])
+with col_btn1:
+    if st.button("🆕 开启新对话（清空上下文记忆）"):
+        st.session_state["messages"] = []
+        st.rerun()
+with col_btn2:
+    # 挑战2：导出对话txt文件
+    export_text = ""
+    if st.session_state["messages"]:
+        export_text += "===== 郑州航院小航对话记录 =====\n\n"
+        # 遍历上下文对话列表，拼接文本
+        for msg in st.session_state["messages"]:
+            if msg["role"] == "user":
+                export_text += f"【用户提问】{msg['content']}\n"
+            elif msg["role"] == "assistant":
+                export_text += f"【AI回答】{msg['content']}\n"
+                export_text += "----------------------------------------\n\n"
+    # 生成带日期的文件名
+    file_name = f"小航对话记录_{time.strftime('%Y%m%d')}.txt"
+    st.download_button(
+        label="📥 导出对话记录",
+        data=export_text,
+        file_name=file_name,
+        mime="text/plain"
+    )
 
-# 别名替换
+# 别名替换预处理
 def replace_alias(text):
     for k, v in INPUT_ALIAS.items():
         text = text.replace(k, v)
@@ -151,7 +173,7 @@ else:
             "model": "deepseek-ai/DeepSeek-V3.2",
             "max_tokens": 600,
             "temperature": 0.01,
-            "messages": full_messages  # 携带完整上下文
+            "messages": full_messages
         }
 
         with st.spinner("🤖 小航正在思考中..."):
