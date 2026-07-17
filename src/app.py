@@ -25,6 +25,9 @@ if "question_history" not in st.session_state:
 # 多轮上下文对话存储
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
+# 新增：身份会话存储，解决切换不生效
+if "user_role" not in st.session_state:
+    st.session_state.user_role = "新生"
 
 # 全局仅加载一次知识库
 kb_data = load_school_info()
@@ -33,12 +36,22 @@ md_files = list(Path("data").glob("*.md"))
 # 页面标题
 st.title("小航 · 郑州航院校园信息助手")
 
-# 身份下拉选择
-user_role = st.selectbox("你的身份：", ["新生", "在校生", "教师"])
+# ========== 修复身份下拉选择核心代码 ==========
+# 增加on_change=st.rerun，切换身份立刻刷新页面
+user_role = st.selectbox(
+    "你的身份：",
+    ["新生", "在校生", "教师"],
+    index=["新生", "在校生", "教师"].index(st.session_state.user_role),
+    on_change=st.rerun
+)
+# 将选中身份存入会话状态，全局读取统一使用st.session_state.user_role
+st.session_state.user_role = user_role
+# 实时展示当前生效身份，方便调试
+st.info(f"当前咨询身份：{st.session_state.user_role}")
 
-# 【功能5 4分类标签页】
+# 【功能5 仅剩3分类标签页：删除交通出行】
 st.markdown("### 快捷提问（点击自动填充并查询AI）")
-tab1, tab2, tab3, tab4 = st.tabs(["新生指南", "办事流程", "应急防骗", "交通出行"])
+tab1, tab2, tab3 = st.tabs(["新生指南", "办事流程", "应急防骗"])
 
 # 标签1：新生指南
 with tab1:
@@ -67,23 +80,6 @@ with tab3:
     for idx, q in enumerate(safe_qs):
         with cols[idx % 2]:
             if st.button(q, key=f"tab_safe_{idx}"):
-                st.session_state.user_q = q
-                st.rerun()
-
-# 标签4：交通出行（6个快捷键）
-with tab4:
-    traffic_qs = [
-        "怎么坐地铁去学校？",
-        "到郑航可以坐哪几路公交？",
-        "郑州东站怎么到龙子湖校区？",
-        "新生报到有迎新大巴吗？",
-        "自驾入校停车怎么收费？",
-        "学校有没有校内通勤校车？"
-    ]
-    cols = st.columns(2)
-    for idx, q in enumerate(traffic_qs):
-        with cols[idx % 2]:
-            if st.button(q, key=f"tab_traffic_{idx}"):
                 st.session_state.user_q = q
                 st.rerun()
 
@@ -164,8 +160,9 @@ else:
         if process_text not in st.session_state.question_history:
             st.session_state.question_history.append(process_text)
 
-        # 构造多轮对话完整messages（系统词 + 历史对话 + 当前提问）
-        system_prompt = get_system_prompt(user_role, kb_data)
+        # ========== 修复：统一读取会话里存储的身份，不再用局部变量user_role ==========
+        current_role = st.session_state.user_role
+        system_prompt = get_system_prompt(current_role, kb_data)
         full_messages = [{"role": "system", "content": system_prompt}] + st.session_state["messages"]
         full_messages.append({"role": "user", "content": process_text})
 
